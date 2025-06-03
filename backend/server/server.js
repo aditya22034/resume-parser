@@ -1,55 +1,189 @@
-// server.js
 import express from "express";
 import cors from "cors";
 import multer from "multer";
 import path from "path";
-import fs from "fs";
+import fs from "fs/promises";
+import fetch from "node-fetch";
+import * as fsSync from "fs";
+import { fileURLToPath } from "url";
+import { dirname } from "path";
+
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
 
 const app = express();
 const PORT = 5000;
 
-// Enable CORS so your React frontend (usually on localhost:5173) can call this API
 app.use(cors());
 
-// Make sure uploads folder exists or create it
-const uploadsDir = path.join(process.cwd(), "uploads");
-if (!fs.existsSync(uploadsDir)) {
-  fs.mkdirSync(uploadsDir);
+// Ensure uploads directory exists
+const uploadsDir = path.join(__dirname, "uploads");
+if (!fsSync.existsSync(uploadsDir)) {
+  fsSync.mkdirSync(uploadsDir);
 }
 
-// Setup multer for file upload, saving files to uploads folder
 const storage = multer.diskStorage({
-  destination: function (req, file, cb) {
-    cb(null, uploadsDir);
-  },
-  filename: function (req, file, cb) {
-    // Save file with original name + timestamp to avoid conflicts
+  destination: (req, file, cb) => cb(null, uploadsDir),
+  filename: (req, file, cb) => {
     const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1e9);
     cb(null, uniqueSuffix + "-" + file.originalname);
   },
 });
 
-const upload = multer({ storage: storage });
+const upload = multer({ storage });
 
-// POST /api/upload to receive the resume file
-app.post("/api/upload", upload.single("resume"), (req, res) => {
-  if (!req.file) {
-    return res.status(400).json({ error: "No file uploaded" });
+async function getResumeScore(text) {
+  const prompt = `
+Please analyze the following resume and return a score (0–100) evaluating the resume quality. Respond with ONLY the number.
+
+Resume:
+${text}
+  `;
+
+  try {
+    const response = await fetch("http://localhost:11434/api/generate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: "phi4-mini",  // Change this to your actual model name
+        prompt,
+        stream: false,
+      }),
+    });
+
+    const data = await response.json();
+    const output = data.response.trim();
+    const score = parseInt(output, 10);
+
+    if (isNaN(score)) {
+      console.warn("Couldn't parse score:", output);
+      return null;
+    }
+
+    return score;
+  } catch (err) {
+    console.error("Error calling Ollama:", err);
+    return null;
   }
+}
 
-  console.log("File received:", req.file.path);
+app.post("/api/upload", upload.single("resume"), async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: "No file uploaded" });
 
-  // Here you can do your analysis or call external API for scoring
+  try {
+    const resumeText = await fs.readFile(req.file.path, "utf8");
+    // console.log(resumeText)
 
-  // For now, respond with a dummy score
-  const dummyScore = Math.floor(Math.random() * 100) + 1;
+    const score = await getResumeScore(resumeText);
+    console.log(score)
 
-  res.json({
-    message: "File uploaded successfully",
-    score: dummyScore,
-  });
+    if (score === null) {
+      return res.status(500).json({ error: "Failed to compute score" });
+    }
+
+    res.json({ message: "Resume analyzed", score });
+  } catch (error) {
+    console.error("Error analyzing resume:", error);
+    res.status(500).json({ error: "Failed to process resume" });
+  }
 });
 
 app.listen(PORT, () => {
-  console.log(`Server running on http://localhost:${PORT}`);
+  console.log(PORT)
+  console.log(`Server running at http://localhost:${PORT}`);
 });
+// import express from "express";
+// import cors from "cors";
+// import multer from "multer";
+// import path from "path";
+// import fs from "fs/promises";
+// import fetch from "node-fetch";
+// import * as fsSync from "fs";
+// import { fileURLToPath } from "url";
+// import { dirname } from "path";
+// import pdfParse from "pdf-parse";  // ✅ Add this line to extract text from PDF
+
+// const __filename = fileURLToPath(import.meta.url);
+// const __dirname = dirname(__filename);
+
+// const app = express();
+// const PORT = 5000;
+
+// app.use(cors());
+
+// const uploadsDir = path.join(__dirname, "uploads");
+// if (!fsSync.existsSync(uploadsDir)) {
+//   fsSync.mkdirSync(uploadsDir);
+// }
+
+// const storage = multer.diskStorage({
+//   destination: (req, file, cb) => cb(null, uploadsDir),
+//   filename: (req, file, cb) => {
+//     const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1e9);
+//     cb(null, uniqueSuffix + "-" + file.originalname);
+//   },
+// });
+
+// const upload = multer({ storage });
+
+// async function getResumeScore(text) {
+//   const prompt = `
+// Please analyze the following resume and return a score (0–100) evaluating the resume quality. Respond with ONLY the number.
+
+// Resume:
+// ${text}
+//   `;
+
+//   try {
+//     const response = await fetch("http://localhost:11434/api/generate", {
+//       method: "POST",
+//       headers: { "Content-Type": "application/json" },
+//       body: JSON.stringify({
+//         model: "phi4-mini",  // Your model name in Ollama
+//         prompt,
+//         stream: false,
+//       }),
+//     });
+
+//     const data = await response.json();
+//     const output = data.response.trim();
+//     const score = parseInt(output, 10);
+
+//     if (isNaN(score)) {
+//       console.warn("Couldn't parse score:", output);
+//       return null;
+//     }
+
+//     return score;
+//   } catch (err) {
+//     console.error("Error calling Ollama:", err);
+//     return null;
+//   }
+// }
+
+// app.post("/api/upload", upload.single("resume"), async (req, res) => {
+//   if (!req.file) return res.status(400).json({ error: "No file uploaded" });
+
+//   try {
+//     const pdfBuffer = await fs.readFile(req.file.path);      // ✅ Read as binary
+//     const parsedData = await pdfParse(pdfBuffer);            // ✅ Extract text
+//     const resumeText = parsedData.text;
+
+//     const score = await getResumeScore(resumeText);
+//     console.log("Score:", score);
+
+//     if (score === null) {
+//       return res.status(500).json({ error: "Failed to compute score" });
+//     }
+
+//     res.json({ message: "Resume analyzed", score });
+//   } catch (error) {
+//     console.error("Error analyzing resume:", error);
+//     res.status(500).json({ error: "Failed to process resume" });
+//   }
+// });
+
+// app.listen(PORT, () => {
+//   console.log(`✅ Server running at http://localhost:${PORT}`);
+// });
